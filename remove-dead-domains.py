@@ -5,7 +5,6 @@
 import argparse
 import concurrent.futures
 import errno
-import functools
 import ipaddress
 import os
 import socket
@@ -39,10 +38,8 @@ def dns_resolve(domain, dns_server, start_event):
   return False
 
 
-@functools.lru_cache(maxsize=2048)
-def has_tcp_port_open(ip, port, start_event):
+def has_tcp_port_open(ip, port):
   """ Return True if domain is listening on a TCP port, False instead. """
-  start_event.wait()
   r = True
   with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as sckt:
     sckt.settimeout(10)
@@ -74,7 +71,7 @@ if __name__ == "__main__":
   # resolve domains with thread pool
   dns_check_futures = []
   start_event = threading.Event()
-  with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() * 12) as executor:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() * 8) as executor:
     # add work
     for domain in domains:
       dns_check_domain_futures = []
@@ -97,8 +94,7 @@ if __name__ == "__main__":
 
   # for domains with at least one failed DNS resolution, check open ports
   tcp_check_futures = {}
-  start_event.clear()
-  with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() * 2) as executor:
+  with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count() * 4) as executor:
     for dns_check_domain_futures, domain in zip(dns_check_futures, domains):
       dns_check_domain_results = tuple(f.result() for f in dns_check_domain_futures)
       if not any(dns_check_domain_results):
@@ -109,7 +105,7 @@ if __name__ == "__main__":
         ip = next(filter(None, dns_check_domain_results))  # take result of first successful resolution
         tcp_check_domain_futures = []
         for port in WEB_PORTS:
-          future = executor.submit(has_tcp_port_open, ip, port, start_event)
+          future = executor.submit(has_tcp_port_open, ip, port)
           tcp_check_domain_futures.append(future)
         tcp_check_futures[domain] = tcp_check_domain_futures
 
@@ -119,7 +115,6 @@ if __name__ == "__main__":
                    desc="TCP domain checks",
                    unit=" domains",
                    leave=True) as progress:
-      start_event.set()
       for i, f in enumerate(concurrent.futures.as_completed([f for p in tcp_check_futures.values()
                                                              for f in p])):
         if (i % len(WEB_PORTS)) == 0:
