@@ -71,7 +71,7 @@ if __name__ == "__main__":
   # resolve domains with thread pool
   dns_check_futures = []
   start_event = threading.Event()
-  with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() * 8) as executor:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=len(os.sched_getaffinity(0)) * 8) as executor:
     # add work
     for domain in domains:
       dns_check_domain_futures = []
@@ -94,7 +94,7 @@ if __name__ == "__main__":
 
   # for domains with at least one failed DNS resolution, check open ports
   tcp_check_futures = {}
-  with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count() * 4) as executor:
+  with concurrent.futures.ProcessPoolExecutor(max_workers=len(os.sched_getaffinity(0)) * 4) as executor:
     for dns_check_domain_futures, domain in zip(dns_check_futures, domains):
       dns_check_domain_results = tuple(f.result() for f in dns_check_domain_futures)
       if not any(dns_check_domain_results):
