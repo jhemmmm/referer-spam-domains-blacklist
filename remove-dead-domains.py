@@ -3,13 +3,13 @@
 """ Remove dead domains from list. """
 
 import argparse
-import concurrent.futures
+import asyncio
+import collections
 import errno
 import ipaddress
 import os
-import socket
+import random
 import subprocess
-import threading
 
 import tqdm
 
@@ -20,16 +20,18 @@ DNS_SERVERS = ("8.8.8.8",  # Google DNS
                "209.244.0.3",  # Level3 DNS
                "8.26.56.26")  # Comodo Secure DNS
 WEB_PORTS = (80, 443)
+MAX_CONCURRENT_PROCESSES = len(os.sched_getaffinity(0)) * 8
 
 
-
-def dns_resolve(domain, dns_server, start_event):
+async def dns_resolve(domain, dns_server, sem, async_loop):
   """ Return IP string if domain has a DNA A record on this DNS server, False otherwise. """
-  start_event.wait()
-  cmd = ("dig", "+short", "+time=5", "+tries=999", "@%s" % (dns_server), domain)
-  output = subprocess.check_output(cmd, universal_newlines=True)
+  cmd = ("dig", "+short", "+time=1", "+tries=999", "@%s" % (dns_server), domain)
+  with (await sem):
+    p = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, loop=async_loop)
+    output = await p.communicate()
+  output = output[0]
   if output:
-    ip = output.splitlines()[-1]
+    ip = output.decode().splitlines()[-1]
     try:
       # validate IP
       return str(ipaddress.IPv4Address(ip))
@@ -38,20 +40,36 @@ def dns_resolve(domain, dns_server, start_event):
   return False
 
 
-def has_tcp_port_open(ip, port):
+async def dns_resolve_domain(domain, progress, sem, async_loop):
+  """ Return IP string if domain has a DNA A record on this DNS server, False otherwise. """
+  dns_servers = list(DNS_SERVERS)
+  random.shuffle(dns_servers)
+  r = []
+  for dns_server in dns_servers:
+    ip = await dns_resolve(domain, dns_server, sem, async_loop)
+    r.append(ip or None)
+  progress.update(1)
+  if progress.n == progress.total:
+    async_loop.stop()
+  return r
+
+
+async def has_tcp_port_open(ip, port, progress, async_loop):
   """ Return True if domain is listening on a TCP port, False instead. """
   r = True
-  with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as sckt:
-    sckt.settimeout(10)
-    try:
-      sckt.connect((ip, port))
-    except (ConnectionRefusedError, socket.timeout):
+  coroutine = asyncio.open_connection(ip, port)
+  try:
+    await asyncio.wait_for(coroutine, timeout=10)
+  except (ConnectionRefusedError, asyncio.TimeoutError):
+    r = False
+  except OSError as e:
+    if e.errno == errno.EHOSTUNREACH:
       r = False
-    except OSError as e:
-      if e.errno == errno.EHOSTUNREACH:
-        r = False
-      else:
-        raise
+    else:
+      raise
+  progress.update(1)
+  if progress.n == progress.total:
+    async_loop.stop()
   return r
 
 
@@ -68,68 +86,57 @@ if __name__ == "__main__":
     domains = tuple(map(str.rstrip, list_file.readlines()))
   dead_domains = set()
 
-  # resolve domains with thread pool
+  # resolve domains
+  async_loop = asyncio.get_event_loop()
+  sem = asyncio.BoundedSemaphore(MAX_CONCURRENT_PROCESSES, loop=async_loop)
   dns_check_futures = []
-  start_event = threading.Event()
-  with concurrent.futures.ThreadPoolExecutor(max_workers=len(os.sched_getaffinity(0)) * 8) as executor:
-    # add work
+  tcp_check_domain_ips = {}
+  with tqdm.tqdm(total=len(domains),
+                 miniters=1,
+                 smoothing=0,
+                 desc="Domains checks",
+                 unit=" domains") as progress:
     for domain in domains:
-      dns_check_domain_futures = []
-      for dns_server in DNS_SERVERS:
-        future = executor.submit(dns_resolve, domain, dns_server, start_event)
-        dns_check_domain_futures.append(future)
-      dns_check_futures.append(dns_check_domain_futures)
+      coroutine = dns_resolve_domain(domain, progress, sem, async_loop)
+      future = asyncio.ensure_future(coroutine, loop=async_loop)
+      dns_check_futures.append(future)
 
-    # show progress
-    with tqdm.tqdm(total=len(dns_check_futures),
-                   miniters=1,
-                   smoothing=0.1,
-                   desc="DNS domain checks",
-                   unit=" domains") as progress:
-      start_event.set()
-      for i, f in enumerate(concurrent.futures.as_completed([f for dns_check_domain_futures in dns_check_futures
-                                                             for f in dns_check_domain_futures])):
-        if (i % len(DNS_SERVERS)) == 0:
-          progress.update(1)
+    async_loop.run_forever()
+
+    for domain, future in zip(domains, dns_check_futures):
+      ips = future.result()
+      if not any(ips):
+        # all dns resolutions failed for this domain
+        dead_domains.add(domain)
+      elif not all(ips):
+        # at least one dns resolution failed, but at least one succeeded for this domain
+        tcp_check_domain_ips[domain] = ips
 
   # for domains with at least one failed DNS resolution, check open ports
-  tcp_check_futures = {}
-  with concurrent.futures.ProcessPoolExecutor(max_workers=len(os.sched_getaffinity(0)) * 4) as executor:
-    for dns_check_domain_futures, domain in zip(dns_check_futures, domains):
-      dns_check_domain_results = tuple(f.result() for f in dns_check_domain_futures)
-      if not any(dns_check_domain_results):
-        # all DNS checks failed
+  tcp_check_futures = collections.defaultdict(list)
+  with tqdm.tqdm(total=len(tcp_check_domain_ips) * len(WEB_PORTS),
+                 miniters=1,
+                 desc="TCP domain checks",
+                 unit=" domains",
+                 leave=True) as progress:
+    for domain, ips in tcp_check_domain_ips.items():
+      ip = next(filter(None, ips))  # take result of first successful resolution
+      for port in WEB_PORTS:
+        coroutine = has_tcp_port_open(ip, port, progress, async_loop)
+        future = asyncio.ensure_future(coroutine, loop=async_loop)
+        tcp_check_futures[domain].append(future)
+
+    async_loop.run_forever()
+
+    for domain, futures in tcp_check_futures.items():
+      status = tuple(future.result() for future in futures)
+      if not any(status):
+        # no web port open for this domain
         dead_domains.add(domain)
-      elif not all(dns_check_domain_results):
-        # at least one DNS check failed, but at least one succeeded
-        ip = next(filter(None, dns_check_domain_results))  # take result of first successful resolution
-        tcp_check_domain_futures = []
-        for port in WEB_PORTS:
-          future = executor.submit(has_tcp_port_open, ip, port)
-          tcp_check_domain_futures.append(future)
-        tcp_check_futures[domain] = tcp_check_domain_futures
-
-    # show progress
-    with tqdm.tqdm(total=len(tcp_check_futures),
-                   miniters=1,
-                   desc="TCP domain checks",
-                   unit=" domains",
-                   leave=True) as progress:
-      for i, f in enumerate(concurrent.futures.as_completed([f for p in tcp_check_futures.values()
-                                                             for f in p])):
-        if (i % len(WEB_PORTS)) == 0:
-          progress.update(1)
-
-  # results
-  for domain, tcp_check_domain_futures in tcp_check_futures.items():
-    tcp_check_domain_results = tuple(f.result() for f in tcp_check_domain_futures)
-    if not any(dns_check_domain_results):
-      # no web port open for this domain
-      dead_domains.add(domain)
 
   # write new file
   with open(args.list_file, "wt") as list_file:
-   for domain in domains:
+    for domain in domains:
       if domain not in dead_domains:
         list_file.write("%s\n" % (domain))
   print("\n%u dead domain(s) removed" % (len(dead_domains)))
