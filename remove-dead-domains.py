@@ -8,6 +8,7 @@ import collections
 import errno
 import random
 import resource
+import time
 
 import aiodns
 import tqdm
@@ -136,6 +137,7 @@ if __name__ == "__main__":
     for domain, ips in tcp_check_domain_ips.items():
       ip = next(filter(None, ips))  # take result of first successful resolution
       for port in WEB_PORTS:
+        time.sleep(0.05)
         coroutine = has_tcp_port_open(ip, port, progress, async_loop)
         future = asyncio.ensure_future(coroutine, loop=async_loop)
         tcp_check_futures[domain].append(future)
