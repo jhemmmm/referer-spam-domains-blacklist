@@ -30,7 +30,7 @@ async def dns_resolve(domain, dns_server, sem, async_loop):
   for attempt in range(1, 20 + 1):
     coroutine = resolver.query(domain, "A")
     try:
-      with (await sem):
+      async with sem:
         response = await asyncio.wait_for(coroutine, timeout=timeout, loop=async_loop)
     except asyncio.TimeoutError:
       jitter = random.randint(-20, 20) / 100
