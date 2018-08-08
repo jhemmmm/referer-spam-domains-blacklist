@@ -595,6 +595,7 @@ freenode.info
 freesafeip.com
 free-share-buttons.com
 freewebs.com
+free-website-traffic.com
 freewhatsappload.com
 freewlan.info
 freshberry.com.ua
@@ -1212,6 +1213,7 @@ podemnik.pro
 podseka1.ru
 pogruztehnik.ru
 poisk-zakona.ru
+poiskzakona.ru
 poki.ro
 pokupaylegko.ru
 pomoc-drogowa.cba.pl
@@ -1488,6 +1490,7 @@ smotri-filmu.ru
 sms2x2.ru
 smsactivator.ru
 snabs.kz
+snegozaderzhatel.ru
 snip.tw
 snjatie-geroinovoy-lomki.ru
 snomer1.ru
