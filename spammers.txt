@@ -123,8 +123,6 @@ auto-kia-fulldrive.ru
 auto-moto-elektronika.cz
 autonew.biz
 auto.rusvile.lt
-auto-seo-service.org
-autoseo-service.org
 autotop.com.ua
 autovideobroadcast.com
 autowebmarket.com.ua
@@ -198,6 +196,7 @@ blavia.00author.com
 bleacherreport.com
 blog100.org
 blog1989.com
+blog4u.top
 blog.f00kclan.de
 bloggen.be
 bloggers.nl
@@ -1413,7 +1412,6 @@ sexytrend.ru
 sfd-chess.ru
 shagtomsk.ru
 sharebutton.net
-share-buttons-for-free.com
 sharebutton.to
 shiksabd.com
 shinikiev.com.ua
