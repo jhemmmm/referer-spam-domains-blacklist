@@ -20,21 +20,23 @@ DNS_SERVERS = ("8.8.8.8",  # Google DNS
                "209.244.0.3",  # Level3 DNS
                "8.26.56.26")  # Comodo Secure DNS
 WEB_PORTS = (80, 443)
-MAX_CONCURRENT_REQUESTS_PER_DNS_SERVER = 8
+MAX_CONCURRENT_REQUESTS_PER_DNS_SERVER = 16
+MAX_DNS_ATTEMPTS = 10
+BASE_DNS_TIMEOUT_S = 0.5
 
 
 async def dns_resolve(domain, dns_server, sem, async_loop):
   """ Return IP string if domain has a DNA A record on this DNS server, False otherwise. """
   resolver = aiodns.DNSResolver(nameservers=(dns_server,), loop=async_loop)
-  timeout = 0.5
-  for attempt in range(1, 20 + 1):
+  timeout = BASE_DNS_TIMEOUT_S
+  for attempt in range(1, MAX_DNS_ATTEMPTS + 1):
     coroutine = resolver.query(domain, "A")
     try:
       async with sem:
         response = await asyncio.wait_for(coroutine, timeout=timeout, loop=async_loop)
     except asyncio.TimeoutError:
       jitter = random.randint(-20, 20) / 100
-      timeout = min(timeout * 1.5, 5) + jitter
+      timeout = BASE_DNS_TIMEOUT_S + jitter
       continue
     except aiodns.error.DNSError:
       return False
