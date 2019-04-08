@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import collections
 import errno
+import itertools
 import random
 import resource
 import time
@@ -40,9 +41,11 @@ async def dns_resolve(domain, dns_server, sem, async_loop):
       continue
     except aiodns.error.DNSError:
       return False
-    else:
+    try:
       ip = response[0].host
-      break
+    except IndexError:
+      return False
+    break
   else:
     # too many failed attemps
     return False
@@ -58,8 +61,6 @@ async def dns_resolve_domain(domain, progress, sems, async_loop):
     ip = await dns_resolve(domain, dns_server, sems[dns_server], async_loop)
     r.append(ip or None)
   progress.update(1)
-  if progress.n == progress.total:
-    async_loop.stop()
   return r
 
 
@@ -77,8 +78,6 @@ async def has_tcp_port_open(ip, port, progress, async_loop):
     else:
       raise
   progress.update(1)
-  if progress.n == progress.total:
-    async_loop.stop()
   return r
 
 
@@ -118,7 +117,7 @@ if __name__ == "__main__":
       future = asyncio.ensure_future(coroutine, loop=async_loop)
       dns_check_futures.append(future)
 
-    async_loop.run_forever()
+    async_loop.run_until_complete(asyncio.gather(*dns_check_futures))
 
     for domain, future in zip(domains, dns_check_futures):
       ips = future.result()
@@ -144,7 +143,7 @@ if __name__ == "__main__":
         future = asyncio.ensure_future(coroutine, loop=async_loop)
         tcp_check_futures[domain].append(future)
 
-    async_loop.run_forever()
+    async_loop.run_until_complete(asyncio.gather(*itertools.chain.from_iterable(tcp_check_futures.values())))
 
     for domain, futures in tcp_check_futures.items():
       status = tuple(future.result() for future in futures)
