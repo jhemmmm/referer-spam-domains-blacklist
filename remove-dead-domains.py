@@ -26,15 +26,15 @@ MAX_DNS_ATTEMPTS = 10
 BASE_DNS_TIMEOUT_S = 0.5
 
 
-async def dns_resolve(domain, dns_server, sem, async_loop):
+async def dns_resolve(domain, dns_server, sem):
   """ Return IP string if domain has a DNA A record on this DNS server, False otherwise. """
-  resolver = aiodns.DNSResolver(nameservers=(dns_server,), loop=async_loop)
+  resolver = aiodns.DNSResolver(nameservers=(dns_server,))
   timeout = BASE_DNS_TIMEOUT_S
   for attempt in range(1, MAX_DNS_ATTEMPTS + 1):
     coroutine = resolver.query(domain, "A")
     try:
       async with sem:
-        response = await asyncio.wait_for(coroutine, timeout=timeout, loop=async_loop)
+        response = await asyncio.wait_for(coroutine, timeout=timeout)
     except asyncio.TimeoutError:
       jitter = random.randint(-20, 20) / 100
       timeout = BASE_DNS_TIMEOUT_S + jitter
@@ -52,19 +52,19 @@ async def dns_resolve(domain, dns_server, sem, async_loop):
   return ip
 
 
-async def dns_resolve_domain(domain, progress, sems, async_loop):
+async def dns_resolve_domain(domain, progress, sems):
   """ Return IP string if domain has a DNA A record on this DNS server, False otherwise. """
   dns_servers = list(DNS_SERVERS)
   random.shuffle(dns_servers)
   r = []
   for dns_server in dns_servers:
-    ip = await dns_resolve(domain, dns_server, sems[dns_server], async_loop)
+    ip = await dns_resolve(domain, dns_server, sems[dns_server])
     r.append(ip or None)
   progress.update(1)
   return r
 
 
-async def has_tcp_port_open(ip, port, progress, async_loop):
+async def has_tcp_port_open(ip, port, progress):
   """ Return True if domain is listening on a TCP port, False instead. """
   r = True
   coroutine = asyncio.open_connection(ip, port)
@@ -102,9 +102,7 @@ if __name__ == "__main__":
     print("Max open files count set from %u to %u" % (soft_lim, hard_lim))
 
   # resolve domains
-  async_loop = asyncio.get_event_loop()
-  sems = collections.defaultdict(lambda: asyncio.BoundedSemaphore(MAX_CONCURRENT_REQUESTS_PER_DNS_SERVER,
-                                                                  loop=async_loop))
+  sems = collections.defaultdict(lambda: asyncio.BoundedSemaphore(MAX_CONCURRENT_REQUESTS_PER_DNS_SERVER))
   dns_check_futures = []
   tcp_check_domain_ips = {}
   with tqdm.tqdm(total=len(domains),
@@ -113,11 +111,11 @@ if __name__ == "__main__":
                  desc="Domains checks",
                  unit=" domains") as progress:
     for domain in domains:
-      coroutine = dns_resolve_domain(domain, progress, sems, async_loop)
-      future = asyncio.ensure_future(coroutine, loop=async_loop)
+      coroutine = dns_resolve_domain(domain, progress, sems)
+      future = asyncio.ensure_future(coroutine)
       dns_check_futures.append(future)
 
-    async_loop.run_until_complete(asyncio.gather(*dns_check_futures))
+    asyncio.get_event_loop().run_until_complete(asyncio.gather(*dns_check_futures))
 
     for domain, future in zip(domains, dns_check_futures):
       ips = future.result()
@@ -139,11 +137,11 @@ if __name__ == "__main__":
       ip = next(filter(None, ips))  # take result of first successful resolution
       for port in WEB_PORTS:
         time.sleep(0.05)
-        coroutine = has_tcp_port_open(ip, port, progress, async_loop)
-        future = asyncio.ensure_future(coroutine, loop=async_loop)
+        coroutine = has_tcp_port_open(ip, port, progress)
+        future = asyncio.ensure_future(coroutine)
         tcp_check_futures[domain].append(future)
 
-    async_loop.run_until_complete(asyncio.gather(*itertools.chain.from_iterable(tcp_check_futures.values())))
+    asyncio.get_event_loop().run_until_complete(asyncio.gather(*itertools.chain.from_iterable(tcp_check_futures.values())))
 
     for domain, futures in tcp_check_futures.items():
       status = tuple(future.result() for future in futures)
