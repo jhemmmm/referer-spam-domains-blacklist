@@ -9,7 +9,6 @@ import errno
 import itertools
 import random
 import resource
-import time
 
 import aiodns
 import tqdm
@@ -69,7 +68,7 @@ async def has_tcp_port_open(ip, port, progress):
   r = True
   coroutine = asyncio.open_connection(ip, port)
   try:
-    await asyncio.wait_for(coroutine, timeout=10)
+    _, writer = await asyncio.wait_for(coroutine, timeout=10)
   except (ConnectionRefusedError, asyncio.TimeoutError):
     r = False
   except OSError as e:
@@ -77,6 +76,8 @@ async def has_tcp_port_open(ip, port, progress):
       r = False
     else:
       raise
+  else:
+    writer.close()
   progress.update(1)
   return r
 
@@ -136,7 +137,6 @@ if __name__ == "__main__":
     for domain, ips in tcp_check_domain_ips.items():
       ip = next(filter(None, ips))  # take result of first successful resolution
       for port in WEB_PORTS:
-        time.sleep(0.05)
         coroutine = has_tcp_port_open(ip, port, progress)
         future = asyncio.ensure_future(coroutine)
         tcp_check_futures[domain].append(future)
